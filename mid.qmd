@@ -1,0 +1,262 @@
+---
+title: "Characterizing Automobiles"
+author: "Chloe Bui"
+date: "03/17/2025"
+
+format: 
+  html:  
+    theme:
+        light: flatly
+        dark: darkly
+    mainfont: monospace
+    highlight-style: github
+    title-block-banner: true
+    embed-resources: true
+
+---
+
+# Setup
+
+- Setup
+
+```{r libs}
+sh <- suppressPackageStartupMessages
+sh(library(tidyverse))
+sh(library(caret))
+sh(library(fastDummies))
+sh(library(class))
+sh(library(ISLR)) # for the "Auto" dataframe
+```
+
+# Dataframe
+
+- We use the `Auto` dataframe.
+
+```{r df}
+head(Auto)
+```
+
+- It has the following variable names, which describe various attributes of automobiles.
+
+```{r df2}
+names(Auto)
+```
+
+# Multiple Regression
+
+- Run a linear regression model with `mpg` as the dependent variable and `horsepower` and `year` as features (variables).
+- Compute and comment on the RMSE.
+
+```{r regression}
+m1 = lm(mpg ~ horsepower, Auto)
+m2 = lm(mpg ~ year, Auto)
+m3 = lm(mpg ~ horsepower + year, Auto)
+m4 = lm(mpg ~ horsepower*year, Auto)
+m5 = lm(mpg ~ ., Auto)
+
+get_rmse <- function(m) {
+    pred <- predict(m, newdata = Auto)
+    sqrt(mean((Auto$mpg - pred)^2))
+}
+
+unlist(lapply(list(m1, m2, m3, m4, m5), get_rmse))
+```
+
+> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+
+Horsepower alone (m1) and Year alone (m2) are poor predictors.
+Adding year to horsepower (m3) improves performance, suggesting that newer cars generally have better fuel efficiency.
+Including interaction effects (m4) further reduces RMSE: RMSE = 3.88, implying that the relationship between horsepower and mpg is influenced by the car's year.
+Using all predictors (m5) gives the best performance: RMSE = 1.06, indicating that a multivariate model incorporating all available features significantly improves predictions.
+
+# Feature Engineering
+
+- Create 10 features based on the `name` column.
+- Remove all rows with a missing value.
+- Ensure only `mpg` and the engineered features remain.
+- Compute and comment on the RMSE.
+
+```{r features}
+df_all <- Auto %>%
+  filter(complete.cases(.)) %>%  # Remove rows with missing values
+  mutate(name = tolower(name)) %>%
+  # create dummy variables
+  mutate(ford = str_detect(name, "ford"),
+         chevrolet = str_detect(name, "chevrolet"),
+         plymouth = str_detect(name, "plymouth"),
+         dodge = str_detect(name, "dodge"),
+         sw = str_detect(name, "sw"),
+         amc = str_detect(name, "amc"),
+         toyota = str_detect(name, "toyota"),
+         datsun = str_detect(name, "datsun"),
+         volkswagen = str_detect(name, "volkswagen"),
+         mazda = str_detect(name, "mazda"))
+
+  # remove description column
+ df_feat = df_all %>% 
+   select(mpg, ford, chevrolet, plymouth, sw, amc, toyota, datsun, volkswagen, mazda)
+      
+```
+
+```{r}
+sqrt(mean((df_all$mpg - predict(lm(formula = mpg ~ ., data = df_all), newdata = df_all))^2))
+```
+```{r}
+sqrt(mean((df_feat$mpg - predict(lm(formula = mpg ~ ., data = df_feat), newdata = df_feat))^2))
+```
+> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+
+The results show that using only car brand dummy variables (df_feat) leads to a poor model (RMSE = 6.84), indicating that brand alone is not a strong predictor of mpg. Meanwhile, the full model (df_all) has a much lower RMSE (1.06) but gives a rank-deficiency warning, suggesting multicollinearity or redundant features. This likely means the model is overfitting to the training data.
+
+# Classification
+
+- Use either of $K$-NN or Naive Bayes to predict whether an automobile is a `chevrolet` or a `honda`.
+- Explain your choice of technique.
+- Report on your Kappa value.
+
+I chose $K$-NN because it works well when we have structured numerical data (e.g., weight, horsepower, year) and it does not require strong independence assumptions like Naive Bayes, which might not hold for car attributes.
+
+```{r classification}
+df_knn <- Auto %>%
+  filter(str_detect(name, "chevrolet|honda")) %>%  
+  mutate(brand = ifelse(str_detect(name, "chevrolet"), "chevrolet", "honda")) %>%  # Create binary class label
+  select(-name) %>%  # Remove name column
+  filter(complete.cases(.))  # Remove missing values
+
+control = trainControl(method = "cv", number = 5)
+
+split <- createDataPartition(df_knn$brand, p = 0.8, list = FALSE)
+train_knn <- df_knn[split, ]
+test_knn <- df_knn[-split, ]
+
+fit_knn = train(brand ~ .,
+                data = train_knn, 
+                method = "knn",
+                tuneLength = 15,
+                metric = "Kappa",
+                trControl = control)
+
+confusionMatrix(predict(fit_knn, test_knn),factor(test_knn$brand))
+```
+
+> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+
+The K-NN model achieved 90% accuracy, correctly classifying 9 out of 10 test cases; however, the Kappa value of 0.6154 suggests only moderate agreement beyond chance, indicating room for improvement. The model performed well in identifying chevrolet cars (sensitivity = 1.0) but struggled with honda (specificity = 0.50), misclassifying one honda as chevrolet. This suggests that chevrolet cars may have more distinct numerical characteristics, making them easier to classify, while honda vehicles might overlap more with other car types.
+
+One key limitation is the small test set (only 10 samples: 8 chevrolet, 2 honda), which makes it difficult to generalize results. Additionally, the dataset is imbalanced, which may have biased the model towards predicting chevrolet.
+
+# Binary Classification
+
+- Predict whether a car is a `honda`.
+- Use model weights.
+- Display and comment on an ROC curve.
+
+```{r binary classification}
+df_honda <- Auto %>%
+  filter(complete.cases(.)) %>% 
+  mutate(name = tolower(name)) %>%
+  mutate(honda = ifelse(str_detect(name, "honda"), "yes", "no")) %>%  # Create binary class label
+  select(-name)
+```
+
+```{r}
+counts <- table(df_honda$honda)
+count_y <- counts["yes"]
+count_n <- counts["no"]
+weigh_y <- max(count_y,count_n)/count_y
+weigh_n <- max(count_y,count_n)/count_n
+
+c(count_y,count_n,weigh_y,weigh_n)
+```
+
+```{r}
+split <- createDataPartition(df_honda$honda, p = 0.8, list = FALSE)
+train_honda <- df_honda[split, ]
+test_honda <- df_honda[-split, ]
+
+train_honda <- train_honda %>% 
+               mutate(weight=ifelse(honda=="yes", weigh_y, weigh_n))
+
+fit_weights = train(honda ~ .,
+                    data = train_honda %>% select(-weight), 
+                    method = "naive_bayes",
+                    tuneLength = 15,
+                    metric = "Kappa",
+                    trControl = control,
+                    weights = train_honda$weight)
+
+confusionMatrix(predict(fit_weights, test_honda),factor(test_honda$honda))
+```
+
+```{r}
+library(pROC)
+
+prob <- predict(fit_weights, newdata = test_honda, type = "prob")[,2]
+myRoc <- roc(test_honda$honda, prob)
+
+plot(myRoc)
+auc(myRoc)
+```
+
+
+> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+
+The Naive Bayes model achieved a high accuracy of 94.81%, but the Kappa value of 0.3094 suggests weak agreement beyond chance, indicating that the model struggles to classify Hondas correctly. The class imbalance (13 Honda vs. 379 non-Honda cars) remains a significant issue despite applying weighting (29.15 for Honda, 1.0 for non-Honda). While the model performs well in identifying non-Honda cars (96% sensitivity), it fails to recognize Honda vehicles effectively, with a specificity of only 50%, misclassifying half of the actual Hondas.
+
+AUC shows that the model can correctly separate Honda cars from non-Honda cars 97.33% of the time based on predicted probabilities.
+
+# Ethics
+
+- Based on your analysis, comment on the [Clean Air Act of 1970 and Ammendments of 1977](https://www.epa.gov/clean-air-act-overview/evolution-clean-air-act)
+- Discuss the civic reposibilities of data scientists for:
+    - Big Data and Human-Centered Computing
+    - Democratic Institutions
+    - Climate Change
+- Provide at least one statistical measure for each, such as a RMSE, Kappa value, or ROC curve.
+
+> <span style="color:red;font-weight:bold">TODO</span>: Big Data and Human-Centered Computing
+
+One of the most direct human-centered impacts of the Clean Air Act was the reduction in automobile emissions through stricter fuel efficiency standards and technological advancements. Using the Auto dataset, we can analyze trends in fuel efficiency (mpg) over time to assess whether legislative actions led to improved fuel economy.
+
+The statistically significant increase in mpg over time suggests that environmental regulations and technological advancements have led to more fuel-efficient cars. The moderate R² value indicates that other factors (such as vehicle weight and engine technology) must be considered when evaluating the long-term effectiveness of emissions policies. Further modeling with additional predictors (e.g., weight, horsepower) could improve explanatory power and provide a deeper understanding of what drives fuel efficiency improvements.
+
+```{r big data}
+lm_mpg_year <- lm(mpg ~ year, data = Auto)
+
+# Output regression coefficients
+summary(lm_mpg_year)
+```
+
+> <span style="color:red;font-weight:bold">TODO</span>: Democratic Institutions
+
+The Clean Air Act, enacted through democratic institutions, aimed to reduce vehicle emissions and improve air quality. However, a key concern is vehicle affordability, as stricter emissions regulations can increase manufacturing costs, potentially limiting access to fuel-efficient cars. The t-test results show that high-efficiency vehicles (mpg > median) are significantly lighter (~2,335 lbs) than low-efficiency vehicles (~3,620 lbs), with a mean difference of ~1,285 lbs (p < 2.2e-16). This suggests that fuel-efficient cars tend to be smaller and potentially more affordable, supporting the argument that environmental policies can improve access to cost-effective transportation options.
+
+```{r democracy}
+Auto_2 <- Auto %>% mutate(efficiency = ifelse(mpg > median(mpg), "high", "low"))
+t.test(weight ~ efficiency, data = Auto_2)
+```
+
+> <span style="color:red;font-weight:bold">TODO</span>: Climate Change
+
+Automobiles are a major contributor to greenhouse gas emissions, and policies like the Clean Air Act aim to reduce carbon footprints. A key metric for climate impact is CO₂ emissions, which correlate with vehicle weight and fuel consumption.
+
+The K-NN model’s high Kappa value (0.8469) indicates a strong ability to classify fuel-efficient vs. inefficient vehicles, highlighting clear distinctions in attributes like weight, horsepower, and displacement. This has significant climate implications, as fuel-efficient cars emit less CO₂, directly supporting emissions reduction goals under policies like the Clean Air Act. 
+
+```{r climate}
+Auto_3 <- Auto %>%
+  mutate(efficiency = ifelse(mpg > median(mpg), "high", "low")) %>%
+  select(-name, -mpg) 
+
+# Train KNN model
+fit_knn <- train(efficiency ~ ., 
+                 data = Auto_3, 
+                 method = "knn", 
+                 tuneLength = 10, 
+                 metric = "Kappa", 
+                 trControl = trainControl(method = "cv", number = 5))
+
+# Evaluate Kappa
+conf_matrix <- confusionMatrix(predict(fit_knn, Auto_3), factor(Auto_3$efficiency))
+kappa_value <- conf_matrix$overall["Kappa"]
+print(kappa_value)
+```
